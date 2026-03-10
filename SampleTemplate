@@ -1,0 +1,422 @@
+import dataiku
+
+# 1. Initialize the client and get the active project
+client = dataiku.api_client()
+project = client.get_default_project()
+project_key = project.project_key
+
+print(f"Scanning project: {project_key}...")
+
+# [Helper Function] Recursively search for a key in nested JSON dictionaries
+def find_keys(node, kv):
+    if isinstance(node, list):
+        for i in node:
+            for x in find_keys(i, kv): yield x
+    elif isinstance(node, dict):
+        if kv in node: yield node[kv]
+        for j in node.values():
+            for x in find_keys(j, kv): yield x
+
+# 2. Gather Connection Names
+connections = set()
+for ds in project.list_datasets():
+    params = ds.get('params', {})
+    if 'connection' in params:
+        connections.add(params['connection'])
+
+for mf in project.list_managed_folders():
+    params = mf.get('folder', {}).get('params', {})
+    if 'connection' in params:
+        connections.add(params['connection'])
+
+# 3. Gather Python Code Environment Name
+project_settings = project.get_settings().get_raw()
+env_selection = project_settings.get('settings', {}).get('envSelection', {})
+env_mode = env_selection.get('envMode', 'INHERIT')
+env_name = env_selection.get('envName', 'None specified')
+
+if env_mode == 'INHERIT':
+    code_env_display = "Inherits the instance's global default Python environment"
+elif env_mode == 'EXPLICIT_ENV':
+    code_env_display = f"**{env_name}**"
+else:
+    code_env_display = f"**{env_name}** (Mode: {env_mode})"
+
+# 4. Gather Spark & Container Configurations
+print("Scanning for Spark & Container configurations...")
+spark_configs = set()
+container_configs = set()
+
+project_raw_settings = project_settings.get('settings', {})
+for c_block in find_keys(project_raw_settings, 'containerSelection'):
+    if isinstance(c_block, dict) and c_block.get('containerMode') == 'EXPLICIT_CONTAINER':
+        container_configs.add(str(c_block.get('containerConf')) + " *(Project-Level Default)*")
+        
+for s_block in find_keys(project_raw_settings, 'sparkConfig'):
+     if isinstance(s_block, dict) and s_block.get('inheritConf'):
+        spark_configs.add(str(s_block.get('inheritConf')) + " *(Project-Level Default)*")
+
+for recipe in project.list_recipes():
+    try:
+        recipe_handle = project.get_recipe(recipe['name'])
+        recipe_settings = recipe_handle.get_settings().get_raw()
+        
+        c_selection = recipe_settings.get('containerSelection', {})
+        if c_selection.get('containerMode') == 'EXPLICIT_CONTAINER':
+            conf = c_selection.get('containerConf')
+            if conf: container_configs.add(conf)
+            
+        for spark_config_block in find_keys(recipe_settings, 'sparkConfig'):
+            if isinstance(spark_config_block, dict):
+                conf_name = spark_config_block.get('inheritConf')
+                if conf_name: spark_configs.add(conf_name)
+    except Exception:
+        pass 
+
+# 5. Gather Used Plugins
+print("Scanning for plugin usage...")
+installed_plugins = client.list_plugins()
+store_plugins_used = []
+custom_plugins_used = []
+
+for plugin_info in installed_plugins:
+    plugin_id = plugin_info.get('id')
+    is_dev = plugin_info.get('isDev', False) 
+    meta = plugin_info.get('meta', {})
+    plugin_label = meta.get('label', plugin_id)
+    
+    try:
+        plugin_handle = client.get_plugin(plugin_id)
+        usages = plugin_handle.list_usages(project_key=project_key).get_raw().get('usages', [])
+        
+        if usages: 
+            if is_dev:
+                custom_plugins_used.append({
+                    'id': plugin_id, 'label': plugin_label, 'version': plugin_info.get('version', 'N/A'),
+                    'description': meta.get('description', 'No description provided.'),
+                    'author': meta.get('author', 'Unknown'), 'usage_count': len(usages)
+                })
+            else:
+                store_plugins_used.append(f"**{plugin_label}** (ID: `{plugin_id}`)")
+    except Exception:
+        pass 
+
+# 6. Gather Scenarios, Triggers, and Frequencies
+print("Scanning Scenarios...")
+scenarios_info = []
+
+for scenario_obj in project.list_scenarios():
+    scen_id = scenario_obj.get('id')
+    scen_name = scenario_obj.get('name', scen_id)
+    
+    try:
+        scen_handle = project.get_scenario(scen_id)
+        scen_settings = scen_handle.get_settings().get_raw()
+        is_active = scen_settings.get('active', False)
+        
+        triggers = scen_settings.get('triggers', [])
+        trigger_details = []
+        
+        for t in triggers:
+            # Skip inactive triggers
+            if not t.get('active', True): 
+                continue
+                
+            t_type = t.get('type', 'Unknown')
+            t_params = t.get('params', {})
+            
+            if t_type == 'time_based':
+                # Frequency can be 'Minutely', 'Hourly', 'Daily', 'Weekly', 'Monthly', or 'Custom'
+                freq = t_params.get('repeatFrequency', 'Custom/Cron')
+                trigger_details.append(f"Time-based ({freq})")
+            elif t_type == 'dataset_modified':
+                ds_name = t_params.get('datasetName', 'Unknown Dataset')
+                trigger_details.append(f"Dataset Modified ({ds_name})")
+            elif t_type == 'step_based':
+                trigger_details.append("Triggered by another Scenario")
+            else:
+                trigger_details.append(t_type.replace('_', ' ').title())
+                
+        if not trigger_details:
+            trigger_details.append("Manual Run Only")
+            
+        scenarios_info.append({
+            'name': scen_name,
+            'status': "🟢 Active" if is_active else "🔴 Inactive",
+            'triggers': ", ".join(trigger_details)
+        })
+    except Exception:
+        pass
+
+# 7. Format the data into Markdown for the Wiki
+md_content = "## Project Architecture & Asset Specs\n\n"
+
+# Scenarios
+md_content += "### Scenarios & Automation\n\n"
+if scenarios_info:
+    md_content += "| Scenario Name | Status | Active Triggers & Frequency |\n"
+    md_content += "|---|---|---|\n"
+    for s in sorted(scenarios_info, key=lambda x: x['name']):
+        md_content += f"| **{s['name']}** | {s['status']} | {s['triggers']} |\n"
+    md_content += "\n---\n\n"
+else:
+    md_content += "*No scenarios are configured in this project.*\n\n---\n\n"
+
+# Code Environment
+md_content += "### Python Code Environment\n"
+md_content += f"The active Python code environment for this project is: {code_env_display}\n\n---\n\n"
+
+# Spark & Containers
+md_content += "### Compute Configurations\n\n"
+md_content += "**Spark Configurations Used:**\n"
+if spark_configs:
+    for sc in sorted(spark_configs): md_content += f"* {sc}\n"
+else:
+    md_content += "* *Inherits the instance's global Spark defaults.*\n"
+
+md_content += "\n**Container Configurations (Kubernetes/Docker) Used:**\n"
+if container_configs:
+    for cc in sorted(container_configs): md_content += f"* {cc}\n"
+else:
+    md_content += "* *Inherits the instance's global Container defaults.*\n"
+md_content += "\n---\n\n"
+
+# Connections
+md_content += "### External Connections\n"
+md_content += "The following connections are used by datasets and managed folders:\n\n"
+if connections:
+    for conn in sorted(connections): md_content += f"* **{conn}**\n"
+else:
+    md_content += "* *No external connections found.*\n"
+md_content += "\n---\n\n"
+
+# Plugins
+md_content += "### Plugins in Use\n\n"
+if not store_plugins_used and not custom_plugins_used:
+    md_content += "*No plugins are currently used in this project.*\n\n"
+else:
+    if store_plugins_used:
+        md_content += "**Store / Installed Plugins:**\n"
+        for p in sorted(store_plugins_used): md_content += f"* {p}\n"
+        md_content += "\n"
+    if custom_plugins_used:
+        md_content += "**Custom (Dev) Plugins:**\n"
+        for cp in custom_plugins_used:
+            md_content += f"* **{cp['label']}** (ID: `{cp['id']}`) - *{cp['usage_count']} components used*\n"
+
+# 8. Publish the Markdown to the Project's Wiki
+wiki = project.get_wiki()
+taxonomy = wiki.get_taxonomy()
+article_title = "Project Architecture Specs"
+
+if taxonomy:
+    home_article_id = taxonomy[0]['id'] 
+    
+    try:
+        # Create or update the Wiki article
+        new_article = wiki.create_article(parent_article_id=home_article_id, title=article_title)
+        article = wiki.get_article(new_article) if isinstance(new_article, str) else new_article
+        article.update(payload=md_content)
+        print(f"Success! Wiki article '{article_title}' has been generated. Check your Wiki tab.")
+    except Exception as e:
+        print(f"Could not create the Wiki article. (If '{article_title}' already exists, delete it first). Error: {e}")
+else:
+    print("Error: Please initialize the Wiki tab in the Dataiku UI first.")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+import dataiku
+
+# 1. Initialize the client and get the active project
+client = dataiku.api_client()
+project = client.get_default_project()
+project_key = project.project_key
+
+print(f"Scanning project: {project_key}...")
+
+# [Helper Function] Recursively search for a key in nested JSON dictionaries
+def find_keys(node, kv):
+    if isinstance(node, list):
+        for i in node:
+            for x in find_keys(i, kv): yield x
+    elif isinstance(node, dict):
+        if kv in node: yield node[kv]
+        for j in node.values():
+            for x in find_keys(j, kv): yield x
+
+# 2. Gather Connection Names
+connections = set()
+for ds in project.list_datasets():
+    params = ds.get('params', {})
+    if 'connection' in params:
+        connections.add(params['connection'])
+
+for mf in project.list_managed_folders():
+    params = mf.get('folder', {}).get('params', {})
+    if 'connection' in params:
+        connections.add(params['connection'])
+
+# 3. Gather Python Code Environment Name
+project_settings = project.get_settings().get_raw()
+env_selection = project_settings.get('settings', {}).get('envSelection', {})
+env_mode = env_selection.get('envMode', 'INHERIT')
+env_name = env_selection.get('envName', 'None specified')
+
+if env_mode == 'INHERIT':
+    code_env_display = "Inherits the instance's global default Python environment"
+elif env_mode == 'EXPLICIT_ENV':
+    code_env_display = f"**{env_name}**"
+else:
+    code_env_display = f"**{env_name}** (Mode: {env_mode})"
+
+# 4. Gather Spark & Container Configurations
+print("Scanning for Spark & Container configurations...")
+spark_configs = set()
+container_configs = set()
+
+# Scan project settings for project-level overrides
+project_raw_settings = project_settings.get('settings', {})
+for c_block in find_keys(project_raw_settings, 'containerSelection'):
+    if isinstance(c_block, dict) and c_block.get('containerMode') == 'EXPLICIT_CONTAINER':
+        container_configs.add(str(c_block.get('containerConf')) + " *(Project-Level Default)*")
+        
+for s_block in find_keys(project_raw_settings, 'sparkConfig'):
+     if isinstance(s_block, dict) and s_block.get('inheritConf'):
+        spark_configs.add(str(s_block.get('inheritConf')) + " *(Project-Level Default)*")
+
+# Scan all recipes for recipe-level overrides
+for recipe in project.list_recipes():
+    try:
+        recipe_handle = project.get_recipe(recipe['name'])
+        recipe_settings = recipe_handle.get_settings().get_raw()
+        
+        # Check for explicit Container Configs (Kubernetes/Docker)
+        c_selection = recipe_settings.get('containerSelection', {})
+        if c_selection.get('containerMode') == 'EXPLICIT_CONTAINER':
+            conf = c_selection.get('containerConf')
+            if conf: container_configs.add(conf)
+            
+        # Check for explicit Spark Configs
+        for spark_config_block in find_keys(recipe_settings, 'sparkConfig'):
+            if isinstance(spark_config_block, dict):
+                conf_name = spark_config_block.get('inheritConf')
+                if conf_name: spark_configs.add(conf_name)
+    except Exception:
+        pass # Fails silently if a recipe's definition is inaccessible
+
+# 5. Gather Used Plugins
+print("Scanning for plugin usage...")
+installed_plugins = client.list_plugins()
+store_plugins_used = []
+custom_plugins_used = []
+
+for plugin_info in installed_plugins:
+    plugin_id = plugin_info.get('id')
+    is_dev = plugin_info.get('isDev', False) 
+    meta = plugin_info.get('meta', {})
+    plugin_label = meta.get('label', plugin_id)
+    
+    try:
+        plugin_handle = client.get_plugin(plugin_id)
+        usages = plugin_handle.list_usages(project_key=project_key).get_raw().get('usages', [])
+        
+        if usages: 
+            if is_dev:
+                custom_plugins_used.append({
+                    'id': plugin_id, 'label': plugin_label, 'version': plugin_info.get('version', 'N/A'),
+                    'description': meta.get('description', 'No description provided.'),
+                    'author': meta.get('author', 'Unknown'), 'usage_count': len(usages)
+                })
+            else:
+                store_plugins_used.append(f"**{plugin_label}** (ID: `{plugin_id}`)")
+    except Exception:
+        pass 
+
+# 6. Format the data into Markdown for the Wiki
+md_content = "## Project Architecture & Asset Specs\n\n"
+
+# Code Environment
+md_content += "### Python Code Environment\n"
+md_content += f"The active Python code environment for this project is: {code_env_display}\n\n---\n\n"
+
+# Spark & Containers
+md_content += "### Compute Configurations\n\n"
+md_content += "**Spark Configurations Used:**\n"
+if spark_configs:
+    for sc in sorted(spark_configs):
+        md_content += f"* {sc}\n"
+else:
+    md_content += "* *Inherits the instance's global Spark defaults.*\n"
+md_content += "\n**Container Configurations (Kubernetes/Docker) Used:**\n"
+if container_configs:
+    for cc in sorted(container_configs):
+        md_content += f"* {cc}\n"
+else:
+    md_content += "* *Inherits the instance's global Container defaults.*\n"
+md_content += "\n---\n\n"
+
+# Connections
+md_content += "### External Connections\n"
+md_content += "The following connections are used by datasets and managed folders:\n\n"
+if connections:
+    for conn in sorted(connections):
+        md_content += f"* **{conn}**\n"
+else:
+    md_content += "* *No external connections found.*\n"
+md_content += "\n---\n\n"
+
+# Plugins
+md_content += "### Plugins in Use\n\n"
+if not store_plugins_used and not custom_plugins_used:
+    md_content += "*No plugins are currently used in this project.*\n\n"
+else:
+    if store_plugins_used:
+        md_content += "**Store / Installed Plugins:**\n"
+        for p in sorted(store_plugins_used): md_content += f"* {p}\n"
+        md_content += "\n"
+    if custom_plugins_used:
+        md_content += "**Custom (Dev) Plugins:**\n"
+        for cp in custom_plugins_used:
+            md_content += f"* **{cp['label']}** (ID: `{cp['id']}`) - *{cp['usage_count']} components used*\n"
+        md_content += "\n"
+
+# 7. Publish the Markdown to the Project's Wiki
+wiki = project.get_wiki()
+taxonomy = wiki.get_taxonomy()
+article_title = "Project Architecture Specs"
+
+if taxonomy:
+    home_article_id = taxonomy[0]['id'] 
+    
+    try:
+        # Create or update the Wiki article
+        new_article = wiki.create_article(parent_article_id=home_article_id, title=article_title)
+        article = wiki.get_article(new_article) if isinstance(new_article, str) else new_article
+        article.update(payload=md_content)
+        print(f"Success! Wiki article '{article_title}' has been generated.")
+    except Exception as e:
+        print(f"Could not create the Wiki article. (If '{article_title}' already exists, delete it first). Error: {e}")
+else:
+    print("Error: Please initialize the Wiki tab in the Dataiku UI first.")
