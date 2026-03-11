@@ -1,0 +1,85 @@
+
+import dataiku
+from dataikuapi.dss.wiki import DSSWikiArticle
+
+# 1. Get current project
+client = dataiku.api_client()
+project = client.get_default_project()
+project_key = project.project_key
+
+# 2. Collect Saved Models, active version, algorithm
+models_info = []
+
+saved_models = project.list_saved_models()  # list of dicts with 'id', 'name', ...
+for sm in saved_models:
+    sm_id = sm["id"]
+    sm_name = sm.get("name", sm_id)
+
+    sm_handle = project.get_saved_model(sm_id)
+
+    # Get active version for each Saved Model
+    active = sm_handle.get_active_version()
+    if active is None:
+        # No active version yet
+        models_info.append({
+            "model_id": sm_id,
+            "model_name": sm_name,
+            "version_id": "N/A",
+            "algorithm": "N/A"
+        })
+        continue
+
+    version_id = active["id"]
+    version_details = sm_handle.get_version_details(version_id)
+
+    # Algorithm name for the active version
+    # per docs, this is in actualParams.resolved.algorithm
+    algo = version_details.details["actualParams"]["resolved"].get("algorithm", "UNKNOWN")
+
+    models_info.append({
+        "model_id": sm_id,
+        "model_name": sm_name,
+        "version_id": version_id,
+        "algorithm": algo
+    })
+
+# 3. Build markdown content for wiki
+lines = []
+lines.append(f"# Model documentation for project `{project_key}`
+")
+lines.append("")
+lines.append("| Model name | Model ID | Latest active version | Algorithm |")
+lines.append("|-----------|----------|-----------------------|-----------|")
+
+for m in models_info:
+    lines.append(
+        f"| {m['model_name']} | {m['model_id']} | {m['version_id']} | {m['algorithm']} |"
+    )
+
+content_md = "
+".join(lines)
+
+# 4. Create or update wiki article
+wiki = project.get_wiki()
+
+# Try to find existing article with a fixed id (e.g. 'model-documentation')
+ARTICLE_ID = "model-documentation"
+
+articles = wiki.list_articles()
+existing = [a for a in articles if a["id"] == ARTICLE_ID]
+
+if existing:
+    article = wiki.get_article(ARTICLE_ID)
+    settings = article.get_settings()
+    settings["title"] = f"Model documentation - {project_key}"
+    settings["body"] = content_md
+    article.set_settings(settings)
+else:
+    # Create a new article
+    wiki.create_article(
+        {
+            "id": ARTICLE_ID,
+            "title": f"Model documentation - {project_key}",
+            "body": content_md
+        }
+    )
