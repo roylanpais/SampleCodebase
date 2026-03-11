@@ -420,3 +420,76 @@ if taxonomy:
         print(f"Could not create the Wiki article. (If '{article_title}' already exists, delete it first). Error: {e}")
 else:
     print("Error: Please initialize the Wiki tab in the Dataiku UI first.")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+import dataiku
+
+# Get API client and current project
+client = dataiku.api_client()
+project_key = dataiku.get_custom_variables()['projectKey']  # works from within DSS [web:5]
+project = client.get_project(project_key)
+
+# List all datasets in the project
+all_datasets = project.list_datasets()  # returns list of dicts with params/connection info [web:1][web:3]
+
+# Build mapping: connection name -> {count, datasets}
+conn_usage = {}
+
+for d in all_datasets:
+    # For safety, get full dataset definition (handles more cases) [web:1][web:3]
+    ds = project.get_dataset(d["name"])
+    definition = ds.get_definition()
+    params = definition.get("params", {})
+
+    connection = params.get("connection", None)
+    if connection is None:
+        # E.g. uploaded files or non‑connection datasets
+        connection = "__NO_CONNECTION__"
+
+    if connection not in conn_usage:
+        conn_usage[connection] = {"count": 0, "datasets": []}
+
+    conn_usage[connection]["count"] += 1
+    conn_usage[connection]["datasets"].append(d["name"])
+
+# Generate wiki‑style text
+lines = []
+lines.append("## Connections
+")
+lines.append("| Connection | # Datasets | Datasets |
+")
+lines.append("|-----------|------------|----------|
+")
+
+for conn, info in sorted(conn_usage.items(), key=lambda x: x[0]):
+    ds_list = ", ".join(sorted(info["datasets"]))
+    lines.append(f"| {conn} | {info['count']} | {ds_list} |
+")
+
+wiki_text = "".join(lines)
+print(wiki_text)
