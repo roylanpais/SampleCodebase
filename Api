@@ -1,0 +1,190 @@
+
+
+import dataiku
+from dataikuapi.dss.wiki import DSSWiki
+
+# Initialize the client for Dataiku 14.2
+client = dataiku.api_client()
+project_key = dataiku.default_project_key()
+project = client.get_project(project_key)
+
+def generate_api_docs():
+    wiki = project.get_wiki()
+    api_services = project.list_api_services()
+    
+    markdown_content = "# Project API Documentation\n\n"
+    markdown_content += "This page is auto-generated to provide technical details for all API Services in this project.\n\n---\n"
+
+    for service_summary in api_services:
+        service = project.get_api_service(service_summary['id'])
+        settings = service.get_settings()
+        
+        markdown_content += f"## API Service: {service_summary['id']}\n"
+        
+        # 1. API Documentation (Description/Metadata)
+        description = settings.get_raw().get('description', 'No description provided.')
+        markdown_content += f"**Description:** {description}\n\n"
+
+        # 2. API Deployment Information
+        # Note: In 14.2, we look at endpoints and basic service settings
+        markdown_content += "### Deployment Info\n"
+        markdown_content += f"- **Service ID:** `{service_summary['id']}`\n"
+        markdown_content += f"- **End-points Count:** {len(settings.get_raw().get('endpoints', []))}\n\n"
+
+        # Iterate through Endpoints to get Schemas
+        for endpoint in settings.get_raw().get('endpoints', []):
+            ep_id = endpoint.get('id')
+            markdown_content += f"#### Endpoint: `{ep_id}`\n"
+            
+            # 3. Input Schema
+            markdown_content += "**Input Schema:**\n"
+            input_schema = endpoint.get('inputSchema', {}).get('columns', [])
+            if input_schema:
+                markdown_content += "| Name | Type |\n|---|---|\n"
+                for col in input_schema:
+                    markdown_content += f"| {col['name']} | {col['type']} |\n"
+            else:
+                markdown_content += "*No explicit input schema defined.*\n"
+
+            # 4. Output Schema
+            markdown_content += "\n**Output Schema:**\n"
+            output_schema = endpoint.get('outputSchema', {}).get('columns', [])
+            if output_schema:
+                markdown_content += "| Name | Type |\n|---|---|\n"
+                for col in output_schema:
+                    markdown_content += f"| {col['name']} | {col['type']} |\n"
+            else:
+                markdown_content += "*Inherited or not defined.*\n"
+            
+            markdown_content += "\n---\n"
+
+    # Create or update the Wiki Article
+    article_id = "api-technical-docs"
+    try:
+        # Check if article exists
+        article = wiki.get_article(article_id)
+        article_data = article.get_data()
+        article_data.set_body(markdown_content)
+        article_data.save()
+        print(f"Updated Wiki: {article_id}")
+    except:
+        # Create new if it doesn't exist
+        wiki.create_article("API Technical Docs", content=markdown_content)
+        print(f"Created new Wiki: {article_id}")
+
+if __name__ == "__main__":
+    generate_api_docs()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+import dataiku
+from dataikuapi import DSSClient
+import json
+
+# Get current project (automates for active project)
+project = dataiku.api_client().get_default_project()  # Or specify: client.get_project('YOUR_PROJECT_KEY')
+
+# Section 1: API Deployment Information
+deployer = project.get_apideployer() if hasattr(project, 'get_apideployer') else None
+deployment_info = ""
+if deployer:
+    deployments = deployer.get_deployments()  # List active deployments [web:7]
+    deployment_info = "## API Deployments
+"
+    for dep in deployments[:5]:  # Limit for brevity
+        status = dep.get_status()  # Gets infra, version, endpoint details [web:7]
+        deployment_info += f"- **{dep.id}**: {status.get('state', 'unknown')} on infra {status.get('infraId', 'N/A')}
+  Versions: {', '.join([v['id'] for v in status.get('versions', [])])}
+
+"
+
+# Section 2: API Services & Documentation
+api_services = project.list_api_services()  # List project API services [web:23]
+api_docs = "## API Services
+"
+for service_item in api_services:
+    service = service_item.to_api_service()  # Full service handle
+    service_id = service.id
+    endpoints = service.list_endpoints()  # Get endpoints with routes, methods [web:14]
+    api_docs += f"- **{service_id}**:
+"
+    for endpoint in endpoints:
+        api_docs += f"  - Endpoint: {endpoint['id']} ({endpoint.get('method', 'GET')} {endpoint.get('path', '/')})
+"
+    api_docs += "
+"
+
+# Section 3-4: Input/Output Schemas (example for first service's first endpoint model/dataset)
+input_schema = "## API Input Schema
+No inputs found."
+output_schema = "## API Output Schema
+No outputs found."
+if api_services:
+    first_service = api_services[0].to_api_service()
+    endpoints = first_service.list_endpoints()
+    if endpoints:
+        # Assume endpoint links to a dataset or model; adapt based on your project (e.g., get_dataset)
+        try:
+            # Example: Fetch schema from linked input dataset (replace 'input_ds_name' with actual)
+            input_ds = project.get_dataset("your_api_input_dataset")  # Customize [web:21]
+            input_schema = f"```json
+{json.dumps(input_ds.get_schema(), indent=2)}
+```
+"  # Schema as JSON [web:21]
+            
+            output_ds = project.get_dataset("your_api_output_dataset")
+            output_schema = f"```json
+{json.dumps(output_ds.get_schema(), indent=2)}
+```
+"
+        except:
+            input_schema = "## API Input Schema
+Link endpoint to input dataset for auto-extract."
+            output_schema = "## API Output Schema
+Link endpoint to output dataset for auto-extract."
+
+# Combine all content
+full_content = f"{deployment_info}
+{api_docs}
+{input_schema}
+
+{output_schema}"
+
+# Create/Update Wiki Pages [web:5]
+wiki = project.get_wiki()
+pages = {
+    "API-Deployment": deployment_info or "No deployments.",
+    "API-Documentation": api_docs or "No API services.",
+    "API-Input-Schema": input_schema,
+    "API-Output-Schema": output_schema
+}
+
+for page_name, content in pages.items():
+    try:
+        article = wiki.get_article_by_name(page_name)
+        article.set_content(content)
+        article.save()
+    except:
+        wiki.create_article(page_name, content=content)  # Creates if missing [web:5]
+
+print("Wiki pages updated: " + ", ".join(pages.keys()))
