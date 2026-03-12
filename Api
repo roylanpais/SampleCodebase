@@ -188,3 +188,78 @@ for page_name, content in pages.items():
         wiki.create_article(page_name, content=content)  # Creates if missing [web:5]
 
 print("Wiki pages updated: " + ", ".join(pages.keys()))
+
+
+
+
+
+
+
+
+
+import dataiku
+from dataikuapi.dss.apideployer import DSSAPIDeployer
+from datetime import datetime
+
+client = dataiku.api_client()
+project_key = dataiku.default_project_key()
+
+def get_deployment_info():
+    # Access the API Deployer
+    deployer = client.get_apideployer()
+    all_deployments = deployer.list_deployments(as_objects=True)
+    
+    # We only want deployments linked to the current project
+    project_deployments = [d for d in all_deployments if d.get_settings().get_raw()['publishedServiceId'] == project_key]
+    
+    markdown_content = "## Active Deployment Status\n\n"
+    markdown_content += "| Deployment ID | Active Version | Infrastructure | Type | Deploy Date | URL |\n"
+    markdown_content += "| :--- | :--- | :--- | :--- | :--- | :--- |\n"
+
+    for dep in project_deployments:
+        # Get basic settings and status
+        settings = dep.get_settings().get_raw()
+        status = dep.get_status().get_raw()
+        
+        # 1. Active Version
+        active_version = status.get('activeVersion', {}).get('versionId', 'N/A')
+        
+        # 2. Infrastructure Details
+        infra_id = settings.get('infraId')
+        infra = deployer.get_infra(infra_id)
+        infra_type = infra.get_settings().get_type() # Static or K8S
+        
+        # 3. Deploy Date (from the 'activeVersion' timestamp)
+        deploy_time_raw = status.get('activeVersion', {}).get('deploymentDate', 0)
+        deploy_date = datetime.fromtimestamp(deploy_time_raw/1000.0).strftime('%Y-%m-%d %H:%M:%S') if deploy_time_raw else "N/A"
+        
+        # 4. URL
+        # The URL is often composed of the Infra URL + Service path
+        # In 14.2, query URLs follow: http://<node-url>/public/api/v1/<service-id>/<endpoint-id>/
+        light_status = status.get('perService', {}).get(project_key, {})
+        # Note: Actual URLs can be found in the health check section of status
+        health_info = status.get('health', {}).get('details', [])
+        node_url = health_info[0].get('url', 'N/A') if health_info else "N/A"
+
+        markdown_content += f"| {dep.id} | {active_version} | {infra_id} | {infra_type} | {deploy_date} | {node_url} |\n"
+    
+    return markdown_content
+
+def update_wiki():
+    wiki = client.get_project(project_key).get_wiki()
+    deployment_markdown = get_deployment_info()
+    
+    # Target article
+    article_id = "api-technical-docs"
+    try:
+        article = wiki.get_article(article_id)
+        data = article.get_data()
+        # Append to existing content or replace
+        data.set_body(data.get_body() + "\n\n" + deployment_markdown)
+        data.save()
+        print("Wiki updated successfully.")
+    except:
+        wiki.create_article("API Technical Docs", content=deployment_markdown)
+
+if __name__ == "__main__":
+    update_wiki()
