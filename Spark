@@ -1,0 +1,79 @@
+import dataiku
+import json
+from dataikuapi import DSSProject
+from collections import Counter
+import datetime
+
+# Get current project (active project)
+client = dataiku.api_client()
+project_key = dataiku.default_project_key()
+project = client.get_project(project_key)
+wiki = project.get_wiki()
+
+# Target wiki article name
+article_name = "Spark-Configuration-Details"
+
+# Fetch recipes FIRST to count usage per Spark config
+recipes = project.list_recipes()
+spark_usage = Counter()
+for list_item in recipes:
+    try:
+        recipe = list_item.to_recipe()
+        settings = recipe.get_settings()
+        raw_params = settings.raw_params
+        if 'sparkConfig' in raw_params and 'inheritConf' in raw_params['sparkConfig']:
+            spark_conf_name = raw_params['sparkConfig']['inheritConf']
+            spark_usage[spark_conf_name] += 1
+    except:
+        pass  # Skip non-Spark recipes
+
+# Fetch Spark configurations
+spark_configs = []
+try:
+    gsettings = client.get_general_settings()
+    instance_spark_confs = gsettings.get_raw().get("sparkSettings", {}).get("executionConfigs", [])
+    for conf in instance_spark_confs:
+        conf_name = conf.get('name', 'N/A')
+        recipes_count = spark_usage.get(conf_name, 0)
+        spark_configs.append({
+            'Name': conf_name,
+            'Type': conf.get('type', 'Unknown'),
+            'Master URL': conf.get('sparkMaster', 'N/A'),
+            'Container Image': conf.get('sparkKubernetesContainerImage', 'N/A'),
+            'Worker Memory': next((item['value'] for item in conf.get('conf', []) if item['key'] == 'spark.executor.memory'), 'N/A'),
+            'Recipes Using': recipes_count,
+            'Key Params': json.dumps({item['key']: item['value'] for item in conf.get('conf', []) if 'spark.executor' in item['key']}, indent=2)
+        })
+except Exception as e:
+    spark_configs.append({'Error': str(e), 'Recipes Using': 0})
+
+# Spark table ONLY with recipe usage count
+spark_table_md = "| Name | Type | Master URL | Container Image | Worker Memory | Recipes Using | Key Params |
+"
+spark_table_md += "|------|------|------------|-----------------|---------------|---------------|------------|
+"
+for config in spark_configs:
+    spark_table_md += f"| {config.get('Name', 'N/A')} | {config.get('Type', 'N/A')} | {config.get('Master URL', 'N/A')} | {config.get('Container Image', 'N/A')} | {config.get('Worker Memory', 'N/A')} | {config.get('Recipes Using', 0)} | {config.get('Key Params', 'N/A')} |
+"
+
+# Wiki content - SPARK TABLE ONLY
+wiki_content = f"""
+# Spark Configuration Details
+
+**Project:** {project_key} | **Generated:** {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S IST')}
+
+Available Spark container configurations with recipe usage counts:
+
+{spark_table_md}
+"""
+
+# Create or update wiki article
+if wiki.exists(article_name):
+    article = wiki.get_article(article_name)
+else:
+    article = wiki.new_article(article_name)
+article_data = article.get_data()
+article_data.set_body(wiki_content)
+article_data.save()
+
+print(f"Wiki '{article_name}' updated: {len(spark_configs)} Spark configs documented.")
