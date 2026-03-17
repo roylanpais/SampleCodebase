@@ -64,29 +64,20 @@ for env_name in code_env_info:
         code_env_info[env_name]["packages"] = ["Not accessible or builtin"]
 
 # Generate Markdown wiki content
-wiki_content = "# Project Code Environments Documentation
-
-"
+wiki_content = "# Project Code Environments Documentation"
 for env_name, info in code_env_info.items():
-    wiki_content += f"## Code Environment: {env_name}
-"
-    wiki_content += "**Recipes using this environment:**
-"
+    wiki_content += f"## Code Environment: {env_name}"
+    wiki_content += "**Recipes using this environment:**"
     for recipe in info["recipes"]:
-        wiki_content += f"- {recipe}
-"
+        wiki_content += f"- {recipe}"
     wiki_content += "
-**Required packages:**
-"
+**Required packages:**"
     if info["packages"]:
         for pkg in info["packages"]:
-            wiki_content += f"- {pkg}
-"
+            wiki_content += f"- {pkg}"
     else:
-        wiki_content += "- None specified
-"
-    wiki_content += "
-"
+        wiki_content += "- None specified"
+    wiki_content += ""
 
 print(wiki_content)
 
