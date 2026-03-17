@@ -1,0 +1,95 @@
+import dataiku
+import json
+
+client = dataiku.api_client()
+project = client.get_default_project()
+
+# Helper to get instance default code envs
+def get_instance_default_code_env(client):
+    defaults = {}
+    general_settings = client.get_general_settings()
+    for rcp_type in [("python", "defaultPythonEnv"), ("r", "defaultREnv")]:
+        code_env = general_settings.settings["codeEnvs"].get(rcp_type[1], None)
+        defaults[rcp_type[0]] = code_env if code_env else "dss_builtin"
+    return defaults
+
+# Get code env mapping for python (focus on Python as per query)
+rcp_types = ["python"]
+mapping = {"python": []}
+settings = project.get_settings()
+project_default_modes = settings.get_raw()["settings"]["codeEnvs"]
+instance_defaults = get_instance_default_code_env(client)
+
+for rcp_type in rcp_types:
+    proj_mode = project_default_modes[rcp_type]
+    if proj_mode["mode"] == "USE_BUILTIN_MODE":
+        env_default = "dss_builtin"
+    elif proj_mode["mode"] == "INHERIT":
+        env_default = instance_defaults.get(rcp_type)
+    elif proj_mode["mode"] == "EXPLICIT_ENV":
+        env_default = proj_mode["envName"]
+    else:
+        env_default = "unknown"
+
+    all_recipes = project.list_recipes()
+    recipes = [r for r in all_recipes if r.type == rcp_type]
+    for r in recipes:
+        name = r.name
+        params = r.params  # params dict available in list_item
+        env_select = params.get("envSelection", {})
+        if env_select.get("envMode") == "EXPLICIT_ENV":
+            code_env = env_select["envName"]
+        else:
+            code_env = env_default
+        mapping[rcp_type].append({"name": name, "code_env": code_env})
+
+# Group by code env
+code_env_info = {}
+for lang in mapping:
+    for item in mapping[lang]:
+        env_name = item["code_env"]
+        if env_name not in code_env_info:
+            code_env_info[env_name] = {"recipes": [], "packages": []}
+        code_env_info[env_name]["recipes"].append(item["name"])
+
+# Get packages for each code env (if exists)
+for env_name in code_env_info:
+    try:
+        code_env = client.get_code_env("PYTHON", env_name)  # Assuming Python
+        env_settings = code_env.get_settings()
+        # Get required packages as list
+        packages_str = env_settings.get_required_packages(as_list=True)
+        code_env_info[env_name]["packages"] = packages_str if packages_str else []
+    except:
+        code_env_info[env_name]["packages"] = ["Not accessible or builtin"]
+
+# Generate Markdown wiki content
+wiki_content = "# Project Code Environments Documentation
+
+"
+for env_name, info in code_env_info.items():
+    wiki_content += f"## Code Environment: {env_name}
+"
+    wiki_content += "**Recipes using this environment:**
+"
+    for recipe in info["recipes"]:
+        wiki_content += f"- {recipe}
+"
+    wiki_content += "
+**Required packages:**
+"
+    if info["packages"]:
+        for pkg in info["packages"]:
+            wiki_content += f"- {pkg}
+"
+    else:
+        wiki_content += "- None specified
+"
+    wiki_content += "
+"
+
+print(wiki_content)
+
+# Optionally write to dataset or managed folder
+# df = dataiku.Dataset("wiki_output")
+# df.write_with_schema({"text": wiki_content})
