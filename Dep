@@ -1,0 +1,386 @@
+import dataiku
+import dataikuapi
+import json
+
+# Initialize client and project
+client = dataiku.api_client()
+project_key = dataiku.default_project_key()
+project = client.get_project(project_key)
+
+def get_project_documentation():
+    wiki = project.get_wiki()
+    
+    # 1. Start building Markdown content
+    content = f"# Project Documentation: {project_key}\n\n"
+    content += "## 1. Deploy Type\n"
+    
+    # Logic to determine deployment type
+    api_services = project.list_api_services()
+    scenarios = project.list_scenarios()
+    
+    is_realtime = len(api_services) > 0
+    # Batch is often identified by existence of a 'Build' scenario or specific tags
+    is_batch = any(s['active'] for s in scenarios) 
+
+    if is_realtime:
+        content += "* **Type:** Real-time API deployment\n"
+    if is_batch:
+        content += "* **Type:** Batch deployment\n"
+    if not is_realtime and not is_batch:
+        content += "* **Type:** Design-only / Manual\n"
+
+    # 2. API Deployment Information
+    content += "\n## 2. API Deployment Information\n"
+    
+    if not api_services:
+        content += "No API Services defined in this project.\n"
+    else:
+        for service_summary in api_services:
+            service = project.get_api_service(service_summary['id'])
+            settings = service.get_settings()
+            
+            content += f"### Service: {service_summary['id']}\n"
+            
+            # API Documentation (Description)
+            desc = settings.get_raw().get('description', 'No description provided.')
+            content += f"**Documentation:** {desc}\n\n"
+            
+            # Extracting endpoints for Schema
+            endpoints = settings.get_raw().get('endpoints', [])
+            for ep in endpoints:
+                content += f"#### Endpoint: {ep.get('id')}\n"
+                
+                # API Input Schema
+                input_schema = ep.get('inputSchema', {}).get('columns', [])
+                content += "**Input Schema:**\n"
+                if input_schema:
+                    content += "| Column | Type |\n|---|---|\n"
+                    for col in input_schema:
+                        content += f"| {col['name']} | {col['type']} |\n"
+                else:
+                    content += "*No specific input schema defined.*\n"
+                
+                # API Output Schema
+                output_schema = ep.get('outputSchema', {}).get('columns', [])
+                content += "\n**Output Schema:**\n"
+                if output_schema:
+                    content += "| Column | Type |\n|---|---|\n"
+                    for col in output_schema:
+                        content += f"| {col['name']} | {col['type']} |\n"
+                else:
+                    content += "*No specific output schema defined.*\n"
+                content += "\n---\n"
+
+    # 3. Create or Update the Wiki Page
+    # Ensure a 'Documentation' article exists or create it
+    try:
+        article = wiki.get_article("project-auto-doc")
+        article_data = article.get_data()
+        article_data.set_body(content)
+        article_data.save()
+        print("Wiki updated successfully.")
+    except:
+        # Create new if it doesn't exist
+        wiki.create_article("project-auto-doc", title="Automated Project Specs", 
+                            parent_id=None, content=content)
+        print("Wiki created successfully.")
+
+if __name__ == "__main__":
+    get_project_documentation()
+
+
+#####################################################################
+2 
+#####################################################################
+
+
+import dataiku
+import json
+
+# ─────────────────────────────────────────────
+# INIT
+# ─────────────────────────────────────────────
+client = dataiku.api_client()
+project = client.get_project(dataiku.default_project_key())
+project_key = project.project_key
+wiki = project.get_wiki()
+
+# ─────────────────────────────────────────────
+# HELPER: Upsert a wiki article (create or update)
+# ─────────────────────────────────────────────
+def upsert_article(wiki, article_name, content, parent_id=None):
+    """Create or overwrite a wiki article by name."""
+    existing = {a["article"]["name"]: a["article"]["id"] for a in wiki.list_articles()}
+    
+    if article_name in existing:
+        article = wiki.get_article(existing[article_name])
+        data = article.get_data()
+        data.set_body(content)
+        data.save()
+        return existing[article_name]
+    else:
+        article = wiki.create_article(article_name, parent_id=parent_id, content=content)
+        return article.get_data().get_metadata()["id"]
+
+# ─────────────────────────────────────────────
+# STEP 1 – Detect Batch Deployments (Scenarios)
+# ─────────────────────────────────────────────
+scenarios = project.list_scenarios(as_type="objects")
+batch_lines = []
+
+for scenario in scenarios:
+    settings = scenario.get_settings()
+    raw = settings.get_raw()
+    
+    name = raw.get("name", scenario.id)
+    active = raw.get("active", False)
+    triggers = raw.get("triggers", [])
+    trigger_summary = ", ".join([t.get("type", "UNKNOWN") for t in triggers]) if triggers else "No triggers defined"
+    
+    batch_lines.append(f"| `{scenario.id}` | {name} | {'✅ Active' if active else '❌ Inactive'} | {trigger_summary} |")
+
+batch_content = """## Batch Deployments
+
+Batch deployments in this project are driven by **Scenarios**.
+Each scenario can be triggered on a schedule, by a dataset availability event, or manually.
+
+| Scenario ID | Name | Status | Triggers |
+|---|---|---|---|
+""" + "
+".join(batch_lines) if batch_lines else """## Batch Deployments
+
+> ℹ️ No scenarios found in this project.
+"""
+
+# ─────────────────────────────────────────────
+# STEP 2 – Detect Real-time API Deployments
+# ─────────────────────────────────────────────
+api_services_raw = project.list_api_services()  # list of dicts with 'id'
+api_sections = []
+
+if api_services_raw:
+    api_deployer = client.get_apideployer()
+    
+    for svc_dict in api_services_raw:
+        service_id = svc_dict["id"]
+        
+        # ── Service-level status ──────────────────
+        try:
+            service = api_deployer.get_service(service_id)
+            svc_status = service.get_status()
+            versions = svc_status.get_versions()
+            deployments = svc_status.get_deployments()
+        except Exception as e:
+            api_sections.append(f"### Service: `{service_id}`
+
+> ⚠️ Could not retrieve deployer status: {e}
+")
+            continue
+
+        version_list = ", ".join([v.get("id", "?") for v in versions]) if versions else "No versions published"
+
+        # ── Deployment-level detail ───────────────
+        deployment_details = []
+        open_api_content = ""
+
+        for dep in deployments:
+            dep_id = dep.id
+            try:
+                dep_status = dep.get_status()
+                health = dep_status.get_health()
+                try:
+                    service_urls = dep_status.get_service_urls()
+                    urls_str = "
+".join([f"- `{u}`" for u in service_urls])
+                except Exception:
+                    urls_str = "_URL not yet available (deployment may still be initializing)_"
+                
+                deployment_details.append(
+                    f"**Deployment ID:** `{dep_id}`  
+"
+                    f"**Health:** {health}  
+"
+                    f"**Endpoint URLs:**  
+{urls_str}"
+                )
+                
+                # ── OpenAPI / Schema ──────────────
+                if not open_api_content:
+                    try:
+                        open_api_obj = dep.get_open_api()
+                        open_api_dict = open_api_obj.get()
+                        
+                        # Extract input/output schemas per path
+                        schema_lines = []
+                        paths = open_api_dict.get("paths", {})
+                        
+                        for path, methods in paths.items():
+                            for method, details in methods.items():
+                                endpoint_id = details.get("operationId", path)
+                                summary = details.get("summary", "")
+                                description = details.get("description", "")
+
+                                # Input schema
+                                input_schema = "Not defined"
+                                request_body = details.get("requestBody", {})
+                                if request_body:
+                                    content_types = request_body.get("content", {})
+                                    for ct, ct_val in content_types.items():
+                                        schema = ct_val.get("schema", {})
+                                        if schema:
+                                            input_schema = f"```json
+{json.dumps(schema, indent=2)}
+```"
+                                            break
+
+                                # Output schema
+                                output_schema = "Not defined"
+                                responses = details.get("responses", {})
+                                for status_code, resp_val in responses.items():
+                                    if str(status_code).startswith("2"):
+                                        resp_content = resp_val.get("content", {})
+                                        for ct, ct_val in resp_content.items():
+                                            schema = ct_val.get("schema", {})
+                                            if schema:
+                                                output_schema = f"```json
+{json.dumps(schema, indent=2)}
+```"
+                                                break
+                                        break
+
+                                schema_lines.append(
+                                    f"#### Endpoint: `{method.upper()} {path}`
+
+"
+                                    f"**Operation ID:** `{endpoint_id}`  
+"
+                                    f"**Summary:** {summary}  
+"
+                                    f"**Description:** {description}  
+
+"
+                                    f"**Input Schema:**
+
+{input_schema}
+
+"
+                                    f"**Output Schema:**
+
+{output_schema}
+"
+                                )
+
+                        # Full OpenAPI spec (collapsed)
+                        raw_spec = json.dumps(open_api_dict, indent=2)
+                        open_api_content = (
+                            "### API Documentation (OpenAPI)
+
+"
+                            + "
+".join(schema_lines)
+                            + "
+
+<details>
+<summary>Full OpenAPI Specification</summary>
+
+"
+                            + f"```json
+{raw_spec}
+```
+
+</details>
+"
+                        )
+                    except Exception as e:
+                        open_api_content = f"> ⚠️ OpenAPI spec not available for deployment `{dep_id}`: {e}
+"
+
+            except Exception as e:
+                deployment_details.append(f"**Deployment ID:** `{dep_id}`  
+> ⚠️ Could not retrieve status: {e}")
+
+        section = f"""### API Service: `{service_id}`
+
+**Published Versions:** {version_list}  
+**Number of Active Deployments:** {len(deployments)}
+
+#### Deployments
+
+{"---".join(deployment_details) if deployment_details else "_No deployments found for this service._"}
+
+{open_api_content}
+"""
+        api_sections.append(section)
+
+api_content = "## Real-time API Deployments
+
+" + "
+---
+".join(api_sections) if api_sections else """## Real-time API Deployments
+
+> ℹ️ No API services found in this project.
+"""
+
+# ─────────────────────────────────────────────
+# STEP 3 – Determine Deployment Type Summary
+# ─────────────────────────────────────────────
+has_batch = len(batch_lines) > 0
+has_api = len(api_services_raw) > 0
+
+if has_batch and has_api:
+    deploy_type = "**Hybrid** — This project uses both Batch (Scenario-based) and Real-time API deployments."
+elif has_batch:
+    deploy_type = "**Batch Deployment** — This project uses Scenario-based batch processing."
+elif has_api:
+    deploy_type = "**Real-time API Deployment** — This project exposes one or more real-time REST API services."
+else:
+    deploy_type = "**Undetermined** — No scenarios or API services were detected in this project."
+
+# ─────────────────────────────────────────────
+# STEP 4 – Write Wiki Articles
+# ─────────────────────────────────────────────
+
+# ── Root overview article ─────────────────────
+overview_content = f"""# Project Documentation: `{project_key}`
+
+_Auto-generated by the documentation automation script._
+
+## Deployment Type
+
+{deploy_type}
+
+---
+
+## Contents
+
+- [Batch Deployments]({project_key} - Batch Deployments)
+- [Real-time API Deployments]({project_key} - API Deployments)
+"""
+
+root_id = upsert_article(wiki, f"{project_key} - Overview", overview_content)
+
+# ── Batch article ─────────────────────────────
+upsert_article(wiki, f"{project_key} - Batch Deployments", batch_content, parent_id=root_id)
+
+# ── API article ───────────────────────────────
+upsert_article(wiki, f"{project_key} - API Deployments", api_content, parent_id=root_id)
+
+# ── Set home article ──────────────────────────
+wiki_settings = wiki.get_settings()
+taxonomy = wiki_settings.get_taxonomy()
+
+# Ensure root article is in taxonomy
+existing_ids = {a["article"]["id"]: a["article"]["name"] for a in wiki.list_articles()}
+root_in_taxonomy = any(t.get("id") == root_id for t in taxonomy)
+if not root_in_taxonomy:
+    taxonomy.append({"id": root_id, "children": []})
+    wiki_settings.set_taxonomy(taxonomy)
+
+wiki_settings.set_home_article_id(root_id)
+wiki_settings.save()
+
+print(f"✅ Wiki documentation generated successfully for project: {project_key}")
+print(f"   - Deployment type: {deploy_type}")
+print(f"   - Batch scenarios found: {len(batch_lines)}")
+print(f"   - API services found: {len(api_services_raw)}")
+
