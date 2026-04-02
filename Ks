@@ -1,0 +1,252 @@
+import dataiku
+
+# Get handles for the current project
+client = dataiku.api_client()
+project = client.get_project(dataiku.default_project_key())
+
+def get_k8s_documentation():
+    settings = project.get_settings()
+    raw_settings = settings.get_raw()
+    
+    # 1. Get Default Containerized Execution Config
+    # In Dataiku 14, this is stored under containerSettings
+    container_settings = raw_settings.get("containerSettings", {})
+    default_config = container_settings.get("executionConfig", "None (Inherited from Global)")
+
+    # 2. List all Kubernetes configurations used in the project
+    # We look for configurations referenced in the project's specific overrides
+    # or used by specific recipes/notebooks if defined at project level
+    configs_used = []
+    
+    # Check for project-level allowed configurations
+    allowed_configs = container_settings.get("allowedExecutionConfigs", [])
+    if allowed_configs:
+        configs_used = allowed_configs
+    else:
+        configs_used = ["Using instance-wide default configurations"]
+
+    # Format the Wiki Content
+    wiki_content = f"## Kubernetes Cluster Documentation\n\n"
+    wiki_content += f"### Default Execution Configuration\n"
+    wiki_content += f"The default containerized execution config for this project is: **{default_config}**\n\n"
+    wiki_content += f"### Kubernetes Container Configurations\n"
+    wiki_content += "The following configurations are available/used in this project:\n"
+    for config in configs_used:
+        wiki_content += f"* {config}\n"
+    
+    return wiki_content
+
+def update_wiki(content):
+    wiki = project.get_wiki()
+    article_id = "infrastructure-docs"
+    
+    try:
+        # Check if article exists
+        article = wiki.get_article(article_id)
+        payload = article.get_payload()
+        payload.set_content(content)
+        article.save_payload(payload)
+        print("Wiki article updated.")
+    except:
+        # Create new article if it doesn't exist
+        wiki.create_article("Infrastructure Documentation", 
+                            article_id=article_id, 
+                            content=content)
+        print("Wiki article created.")
+
+# Run the automation
+doc_content = get_k8s_documentation()
+update_wiki(doc_content)
+
+
+
+
+
+
+#########################################################################################################################################################################
+2
+#########################################################################################################################################################################
+ 
+
+import dataiku
+from dataikuapi.dss.wiki import DSSWiki
+
+# ─── 1. Connect ───────────────────────────────────────────────────────────────
+client = dataiku.api_client()
+project_key = dataiku.default_project_key()
+project = client.get_project(project_key)
+
+# ─── 2. Fetch project settings ────────────────────────────────────────────────
+project_settings = project.get_settings()
+raw_settings = project_settings.settings  # the underlying dict
+
+container_settings = raw_settings.get("containerSettings", {})
+
+# ─── 3. Default containerized execution config for this project ───────────────
+default_container_conf = container_settings.get("defaultContainerConf", "INHERIT")
+# "INHERIT" means it falls back to the DSS instance-level default
+
+# ─── 4. List all K8s container configs defined at the instance level ──────────
+# These are the globally available container execution configs
+try:
+    general_settings = client.get_general_settings()
+    all_container_configs = (
+        general_settings.settings
+        .get("containerSettings", {})
+        .get("executionConfigs", [])
+    )
+except Exception:
+    all_container_configs = []
+
+# ─── 5. Identify which configs are referenced / overridden in this project ────
+# Project-level overrides: each entry says which config is overridden and how
+project_config_overrides = (
+    container_settings.get("executionConfigsGenericOverrides", [])
+)
+project_referenced_config_names = {
+    entry.get("containerConf", "") for entry in project_config_overrides
+}
+
+# Also check all recipes for container config usage (optional deep scan)
+recipe_container_configs = set()
+for recipe_item in project.list_recipes():
+    try:
+        recipe = project.get_recipe(recipe_item.name)
+        recipe_settings = recipe.get_settings()
+        payload = recipe_settings.get_recipe_raw_definition()
+        conf = payload.get("params", {}).get("engineParams", {}).get(
+            "containerConf", payload.get("params", {}).get("containerConf", "")
+        )
+        if conf and conf not in ("INHERIT", "NONE", ""):
+            recipe_container_configs.add(conf)
+    except Exception:
+        pass
+
+all_project_configs = project_referenced_config_names | recipe_container_configs
+
+# ─── 6. Filter instance configs to only those used in this project ─────────────
+used_configs = [
+    cfg for cfg in all_container_configs
+    if cfg.get("name", "") in all_project_configs
+]
+
+# If no project-level overrides exist, list ALL instance configs as candidates
+if not used_configs:
+    used_configs = all_container_configs
+
+# ─── 7. Build the wiki article markdown ───────────────────────────────────────
+lines = []
+lines.append("# K8s Cluster
+")
+
+# Section A: Default containerized execution config
+lines.append("## Default Containerized Execution Config
+")
+if default_container_conf == "INHERIT":
+    # Fall back to instance-level default
+    instance_default = (
+        general_settings.settings
+        .get("containerSettings", {})
+        .get("defaultContainerConf", "Not configured")
+        if all_container_configs else "Not configured"
+    )
+    lines.append(
+        f"This project **inherits** the instance-level default: "
+        f"`{instance_default}`
+"
+    )
+else:
+    lines.append(
+        f"The project-level default containerized execution config is: "
+        f"**`{default_container_conf}`**
+"
+    )
+
+# Section B: All K8s container configs used/available in this project
+lines.append("## Kubernetes Container Configurations
+")
+
+if not used_configs:
+    lines.append("_No Kubernetes container configurations found._
+")
+else:
+    lines.append(
+        f"The following {len(used_configs)} container configuration(s) are "
+        f"defined at the instance level and available to this project:
+"
+    )
+    lines.append("| Name | Kubernetes Namespace | Image Registry | Workload Types | CPU Request | Memory Request |")
+    lines.append("|------|---------------------|----------------|----------------|-------------|----------------|")
+
+    for cfg in used_configs:
+        name          = cfg.get("name", "N/A")
+        namespace     = cfg.get("k8sNamespace", cfg.get("namespace", "N/A"))
+        registry      = cfg.get("registryHost", "N/A")
+        workload_type = cfg.get("workloadType", "Any")
+        cpu_req       = cfg.get("cpuRequest", "N/A")
+        mem_req       = cfg.get("memoryRequestInMB", "N/A")
+        if mem_req != "N/A":
+            mem_req = f"{mem_req} MB"
+        lines.append(
+            f"| `{name}` | {namespace} | {registry} | {workload_type} | "
+            f"{cpu_req} | {mem_req} |"
+        )
+
+    lines.append("")
+
+    # Detailed per-config section
+    lines.append("### Configuration Details
+")
+    for cfg in used_configs:
+        name = cfg.get("name", "N/A")
+        lines.append(f"#### `{name}`
+")
+        lines.append(f"- **Namespace**: `{cfg.get('k8sNamespace', cfg.get('namespace', 'N/A'))}`")
+        lines.append(f"- **Image Registry**: `{cfg.get('registryHost', 'N/A')}`")
+        lines.append(f"- **Workload Type**: `{cfg.get('workloadType', 'Any')}`")
+        lines.append(f"- **Base Image**: `{cfg.get('baseImageType', 'N/A')}`")
+        lines.append(f"- **CPU Request**: `{cfg.get('cpuRequest', 'N/A')}`")
+        lines.append(f"- **CPU Limit**: `{cfg.get('cpuLimit', 'N/A')}`")
+        mem_req = cfg.get("memoryRequestInMB", "N/A")
+        mem_lim = cfg.get("memoryLimitInMB", "N/A")
+        lines.append(f"- **Memory Request**: `{mem_req} MB`" if mem_req != "N/A" else "- **Memory Request**: `N/A`")
+        lines.append(f"- **Memory Limit**: `{mem_lim} MB`" if mem_lim != "N/A" else "- **Memory Limit**: `N/A`")
+        # GPU
+        gpu = cfg.get("gpuRequest", None)
+        if gpu:
+            lines.append(f"- **GPU Request**: `{gpu}`")
+        # Node selector
+        node_selector = cfg.get("nodeSelector", {})
+        if node_selector:
+            ns_str = ", ".join(f"`{k}={v}`" for k, v in node_selector.items())
+            lines.append(f"- **Node Selector**: {ns_str}")
+        # Is this the project default?
+        if name == default_container_conf:
+            lines.append("- ⭐ **This is the project-level default config**")
+        lines.append("")
+
+# ─── 8. Write to the project Wiki ─────────────────────────────────────────────
+wiki_content = "
+".join(lines)
+
+wiki = project.get_wiki()
+wiki_settings = wiki.get_settings()
+
+# Check if the article already exists; update or create
+article_id = "k8s-cluster"
+existing_article_ids = [a["id"] for a in wiki_settings.get_article_list()]
+
+if article_id in existing_article_ids:
+    article = wiki.get_article(article_id)
+    article_data = article.get_data()
+    article_data.get_body()  # load current body
+    article_data.set_body(wiki_content)
+    article.save(article_data)
+    print(f"✅ Wiki article '{article_id}' updated successfully.")
+else:
+    wiki_settings.create_article(article_id, parent_id=None)
+    article = wiki.get_article(article_id)
+    article_data = article.get_data()
+    article_data.set_body(wiki_content)
+    article.save(article_data)
+    print(f"✅ Wiki article '{article_id}' created successfully.") 
