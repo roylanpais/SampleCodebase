@@ -70,6 +70,192 @@
       publicly display, publicly perform, sublicense, and distribute the
       Work and such Derivative Works in Source or Object form.
 
+ Here’s a clean, structured step-by-step guide based on your walkthrough, rewritten so someone new can actually follow it without confusion.
+
+
+---
+
+🚀 Governance Node – Step-by-Step Guide
+
+1. Understand the Homepage Sections
+
+When you land on the Governance Node homepage, you’ll see these core options:
+
+1. Governable Items
+
+Displays a list of projects not yet governed
+
+Use this to identify projects that need governance setup
+
+
+2. Business Initiative
+
+Used for business ideation and strategy planning
+
+Projects are organized into predefined business units / departments
+
+Helps align projects with organizational structure
+
+
+3. Governed Projects
+
+Contains all approved and governed projects
+
+Use this to:
+
+Monitor performance
+
+Review project outcomes
+
+Track governance status
+
+
+
+
+---
+
+2. Explore Supporting Registries
+
+Model Registry
+
+A centralized list of all models from the Designer Node
+
+Used for monitoring and governance
+
+
+Key features:
+
+View model performance (e.g., ROC-AUC)
+
+Detect model drift
+
+Analyze data drift
+
+Compare different evaluation metrics
+
+
+
+---
+
+Bundle Registry (Deployment Stack)
+
+Stores all deployment bundles
+
+Represents your deployment configurations
+
+
+What you can do:
+
+View all bundles
+
+Select a bundle (e.g., “compound analytics”)
+
+Proceed to sign-off process for approvals
+
+
+
+---
+
+3. Create a New Project (Project Gateway)
+
+Step 1: Navigate to Project Gateway
+
+Go to Project Gateway tab
+
+Click Create
+
+
+
+---
+
+Step 2: Enter Project Name
+
+Use a structured naming format:
+
+Department + Initials + Description
+
+Example: IT-Roy-MarketingDemo
+
+
+
+Click Create
+
+
+---
+
+Step 3: Fill Project Details Form
+
+Click Edit and complete the required fields:
+
+Basic Information
+
+Enter project details (name, description, etc.)
+
+
+
+---
+
+Step 4: Assign Project Folder
+
+Choose an existing department folder
+
+Example: Marketing folder
+
+
+If not available, select an appropriate environment
+
+
+
+---
+
+Step 5: Configure Spark Settings
+
+Select Assign Spark Configuration = Yes
+
+
+Options:
+
+Use default configuration
+
+OR customize:
+
+Catalyst config
+
+Call analytics config
+
+
+
+
+---
+
+Step 6: Assign Container
+
+Attach a container to the Spark configuration
+
+
+
+---
+
+Step 7: Create Project
+
+Click Create Project (✔)
+
+This will:
+
+Generate project folders
+
+Initialize the project setup
+
+
+
+
+---
+Step 8: Save
+
+Click Save
+
+Project is now officially created
+
    3. Grant of Patent License. Subject to the terms and conditions of
       this License, each Contributor hereby grants to You a perpetual,
       worldwide, non-exclusive, no-charge, royalty-free, irrevocable
