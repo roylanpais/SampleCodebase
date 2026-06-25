@@ -1,61 +1,54 @@
-## Meeting Minutes: Dataiku Roadmap and Strategy
-### 1. Version Upgrades & Features
- * **Current Status:** The upgrade to version 14.4 for the nodes is complete.
- * **Next Upgrade:** Planning to target version 14.7.1 or 14.7.2 (avoiding the initial .0 release). This is tentatively scheduled for the last quarter, following the completion of current migrations.
- * **New Features:** Version 14.7 introduces "Co-build," a feature allowing users to build flows using natural language.
-### 2. Project Standards & Intake Form Enhancements
- * **Project Standards:** A deep-dive working session with the wider team will be scheduled, though this is currently a lower priority.
- * **Completed Intake Form Tasks:**
-   * Tagging products to be governed.
-   * Auto-governance project tags.
-   * Code environment creation action button via SA (functioning, with potential for future feature additions).
- * **Pending Intake Form Tasks:**
-   * **Spark & Container Config:** Default assignments are working, but the hook needs to be converted to a button.
-   * **Tutorial Projects:** The ability to create tutorial projects directly from the intake form was discussed but designated as a lower priority.
-   * **Branching & Duplication:** Users need the ability to duplicate projects with branching and merging capabilities (Priority 2).
-   * **Git Association:** Will be handled post-project creation, as users will manage their own bucket repositories moving forward.
-### 3. Governance, Models, & Plugins
- * **Bundle Blueprint (Model & Data Metrics):** Production model metrics have been integrated. Final sign-off is pending user feedback following Tuesday's deployment.
- * **Model Sign-off Form:** Awaiting direction from Triveni regarding specific blueprint requirements to ensure users only see relevant project models.
- * **Govern Plugin:** Recommended installing the Govern plugin from the marketplace to pull metrics (e.g., intake submissions) directly into the design node.
- * **Plugin Parity:** Designated as Priority 3.
-### 4. Infrastructure & Advanced Monitoring (Q1 2027 - Q2 Focus)
- * **Configuration Drift Monitoring:** Discussed setting up automated alerts for unauthorized or conflicting configuration changes (e.g., fleet management overwrites). Requires establishing a baseline of expected configurations.
- * **Memory Usage & Performance:**
-   * Monitoring memory thresholds on both the server (C groups) and K8s.
-   * Server memory usage remains the primary concern to prevent job interference.
-   * Future goals include predictive scaling based on job patterns and ML-driven memory optimization.
-### 5. AI Assistance Integration (Priority 2)
- * **Functionality:** AI Assistants (using Dataiku's LLM or a custom LLM mesh) can heavily streamline metadata generation, flow assistance, and code descriptions.
- * **Next Steps:** Requires leadership approval (Chandra) to proceed. A demo will be scheduled to showcase the value to the wider team and leadership.
-### Action Items
-| Task | Owner | Status / Notes |
-|---|---|---|
-| **Share Intake Form Code** | Send the most recent intake form blueprint and code to assist with the hook-to-button conversion. |
-| **Schedule AI Assistant Demo** | Speaker | Prepare and present a demo of the AI Assistant features for Chandra and the team. |
-| **Investigate API Key Error** | Prosper / Speaker | Troubleshoot the "unknown API key" error in the Project Assessment Tool (test personal vs. global keys). |
-| **Schedule Demos/Sessions** | Speaker | Send an email to coordinate dates for upcoming user sessions (e.g., Git versioning, branching). |
-| **Install Govern Plugin** | Team | Install the Govern plugin via the marketplace and configure the host/API key. |
-| **Headless Web App Meeting** | Speaker  | Meet with A on Monday to discuss headless web app exposition. |
-| **Define Config Baselines** | Team | Identify and document baseline configurations required for future drift monitoring. |
+import dataiku
+import pandas as pd
 
-Dataiku API Logging & Infrastructure Configuration
-**
-### Meeting Objective
-To configure, test, and validate end-to-end observability and query logging for Dataiku API endpoints across Staging and Production environments using Kubernetes and external S3 buckets.
-### Key Discussions & Decisions
-| Topic | Discussion & Resolution |
-|---|---|
-| **Infrastructure Configuration** | Modified the deployer node settings for Aura. Safely re-added the URL in the YAML configuration, enabled the duplicate log pod setting for troubleshooting, and set certificates to "Trust All Certificates". |
-| **API Query Observability** | Configured endpoints to capture comprehensive query logs (success/fail statistics, request data, and responses). Unlike standard Dataiku resource logs, these API metrics are routed externally to an S3 bucket under the API monitoring path. |
-| **Deployment & Pod Updates** | Logging changes applied at the infrastructure level do not automatically reflect on live endpoints. Endpoints must be explicitly updated (using the "Update" button, which triggers a rolling update with minimal downtime) so the Kubernetes pods recognize the new configuration. |
-| **Production Environment Setup** | Confirmed the setup will be replicated in Production. The Event Server configuration will be centralized on the Production Design node, pointing to an isolated S3 connection/bucket path specific to Production to maintain data separation. |
-| **Unified Monitoring Feature** | Jordan highlighted the Unified Monitoring panel found on the Deployer node's home screen (bird icon). This provides out-of-the-box monitoring for endpoint health, project status, and node alerting. |
-### Testing & Validation
- * **Staging Validation:** Successfully redeployed a test API endpoint and sent test queries via Postman. Confirmed that the corresponding logs successfully appeared in the Dataiku dataset mapped to the S3 API monitoring path.
- * **Production Validation:** Set up a designated S3 dataset on the Production Designer node. Verified the connection and schema detection for future log parsing.
-### Action Items
- * **Redeploy Remaining Endpoints:** Update all active API endpoints across the remaining infrastructures so they begin pushing query logs to the newly configured S3 datasets.
- * **Dashboard Configuration:** Import or build out the Advanced Analytics project within the Production environment to parse the incoming logs and expose them via monitoring dashboards.
- * **Resource Management:** Ensure any disabled or unused test API endpoints are properly updated to spin down their respective pods on the Kubernetes cluster.
+# Initialize the Dataiku client
+client = dataiku.api_client()
 
+# Fetch all connections available on the DSS instance
+# Note: The user running this recipe must have sufficient permissions to view connections.
+connections = client.list_connections()
+
+results = []
+print(f"Found {len(connections)} connections. Beginning tests...")
+
+for conn_name, conn_def in connections.items():
+    conn_type = conn_def.get("type", "Unknown")
+    
+    # Retrieve the connection object
+    conn_obj = client.get_connection(conn_name)
+    
+    status = "UNKNOWN"
+    message = ""
+    
+    try:
+        # The test() method triggers Dataiku's internal connection verification
+        test_result = conn_obj.test()
+        
+        if test_result.get("connectionOK"):
+            status = "SUCCESS"
+            message = "Connection is active and verified."
+        else:
+            status = "FAILED"
+            # Extract detailed error message if the connection is dead
+            message = test_result.get("errorMsg", "Connection failed. Check credentials or network access.")
+            
+    except Exception as e:
+        # Some connection types (like certain local filesystems) do not support the test() method
+        status = "SKIPPED / UNSUPPORTED"
+        message = f"Testing not supported for this type or threw an exception: {str(e)}"
+        
+    results.append({
+        "connection_name": conn_name,
+        "connection_type": conn_type,
+        "status": status,
+        "message": message
+    })
+
+# Compile results into a pandas DataFrame
+results_df = pd.DataFrame(results)
+
+# Write the DataFrame to the Dataiku output dataset
+output_dataset = dataiku.Dataset("Connection_Test_Results")
+output_dataset.write_with_schema(results_df)
+
+print("Connection testing complete. Results written to the dataset.")
