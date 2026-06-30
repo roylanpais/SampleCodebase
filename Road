@@ -133,3 +133,38 @@ def run():
         print(f"No changes detected across {len(new_snapshot)} connection(s).")
 
 run()
+
+
+
+
+    if changed_connections:
+        timestamp = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
+        report_text = "\n".join(report_lines)
+        print("Configuration drift detected:\n" + report_text)
+
+        history_path = f"history/diff_{timestamp}.txt"
+        folder.upload_data(history_path, report_text.encode("utf-8"))
+        save_snapshot(folder, current_path, new_snapshot)
+
+        # --- NEW: Pass data to Scenario Variables ---
+        try:
+            from dataiku.scenario import Scenario
+            scenario = Scenario()
+            # Pass the report and a flag to trigger the email
+            scenario.set_custom_variables(
+                drift_detected="true", 
+                drift_report=report_text
+            )
+        except Exception:
+            # Fallback if run manually in a notebook instead of a scenario
+            pass
+
+        # We no longer raise an Exception here, so the Scenario finishes successfully 
+        # and moves on to the Email step.
+    else:
+        print(f"No changes detected across {len(new_snapshot)} connection(s).")
+        try:
+            from dataiku.scenario import Scenario
+            Scenario().set_custom_variables(drift_detected="false")
+        except Exception:
+            pass
