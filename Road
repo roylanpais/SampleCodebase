@@ -1,0 +1,135 @@
+import dataiku
+import datetime
+import hashlib
+import json
+
+# ---- Configuration -----------------------------------------------------
+
+# Default Dataiku Managed Folder ID to store snapshots. 
+# Override per-project via the "connection_drift_folder_id" project variable if needed.
+DEFAULT_FOLDER_ID = "YOUR_FOLDER_ID"
+
+# Any dict key containing one of these substrings (case-insensitive) is
+# treated as sensitive and redacted before the snapshot is written to disk.
+SENSITIVE_KEY_SUBSTRINGS = (
+    "password", "secret", "token", "credential", "privatekey", "accesskey", "apikey",
+)
+
+# ---- Implementation ------------------------------------------------------
+
+def get_snapshot_folder():
+    """Resolve the Dataiku folder based on project variables or default."""
+    try:
+        project = dataiku.api_client().get_project(dataiku.default_project_key())
+        override = project.get_variables().get("standard", {}).get("connection_drift_folder_id")
+        folder_id = override if override else DEFAULT_FOLDER_ID
+    except Exception:
+        folder_id = DEFAULT_FOLDER_ID
+        
+    return dataiku.Folder(folder_id)
+
+def redact(value, key_name=""):
+    """Recursively redact sensitive string values, replacing them with a stable
+    hash so changes to a secret are still detectable without storing it."""
+    if isinstance(value, dict):
+        return {k: redact(v, key_name=k) for k, v in value.items()}
+    if isinstance(value, list):
+        return [redact(v, key_name=key_name) for v in value]
+    if isinstance(value, str) and any(s in key_name.lower() for s in SENSITIVE_KEY_SUBSTRINGS):
+        if not value:
+            return ""
+        return "REDACTED:" + hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+    return value
+
+def fetch_connections_snapshot(client):
+    """Pull full settings for every connection, sanitized for storage."""
+    snapshot = {}
+    for name in sorted(client.list_connections().keys()):
+        raw = client.get_connection(name).get_settings().get_raw()
+        # Drop volatile fields that change on their own and aren't real config drift
+        raw.pop("creationTag", None)
+        snapshot[name] = redact(raw)
+    return snapshot
+
+def load_previous(folder, path):
+    """Load the previous JSON snapshot directly from the Dataiku folder."""
+    try:
+        with folder.get_download_stream(path) as stream:
+            return json.loads(stream.read().decode("utf-8"))
+    except Exception:
+        # Stream will throw an exception if the file doesn't exist yet
+        return None
+
+def save_snapshot(folder, path, snapshot):
+    """Save the JSON snapshot directly to the Dataiku folder."""
+    data = json.dumps(snapshot, indent=2, sort_keys=True).encode("utf-8")
+    folder.upload_data(path, data)
+
+def diff_values(old, new, path=""):
+    """Recursively diff two JSON-like structures, returning human-readable lines."""
+    changes = []
+    if isinstance(old, dict) and isinstance(new, dict):
+        for k in sorted(set(old) | set(new)):
+            sub_path = f"{path}.{k}" if path else k
+            if k not in old:
+                changes.append(f"+ ADDED   {sub_path} = {new[k]!r}")
+            elif k not in new:
+                changes.append(f"- REMOVED {sub_path} (was {old[k]!r})")
+            else:
+                changes.extend(diff_values(old[k], new[k], sub_path))
+    elif old != new:
+        changes.append(f"~ CHANGED {path}: {old!r} -> {new!r}")
+    return changes
+
+def run():
+    client = dataiku.api_client()
+    folder = get_snapshot_folder()
+    
+    current_path = "connections_current.json"
+
+    new_snapshot = fetch_connections_snapshot(client)
+    old_snapshot = load_previous(folder, current_path)
+
+    if old_snapshot is None:
+        print(f"No previous snapshot found. Saving baseline with {len(new_snapshot)} connection(s).")
+        save_snapshot(folder, current_path, new_snapshot)
+        return
+
+    report_lines = []
+    changed_connections = 0
+
+    for name in sorted(set(old_snapshot) | set(new_snapshot)):
+        if name not in old_snapshot:
+            changed_connections += 1
+            report_lines.append(f"[{name}] NEW CONNECTION ADDED")
+        elif name not in new_snapshot:
+            changed_connections += 1
+            report_lines.append(f"[{name}] CONNECTION REMOVED")
+        else:
+            diffs = diff_values(old_snapshot[name], new_snapshot[name])
+            if diffs:
+                changed_connections += 1
+                report_lines.append(f"[{name}] {len(diffs)} change(s):")
+                report_lines.extend(f"    {d}" for d in diffs)
+
+    if changed_connections:
+        timestamp = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
+        report_text = "\n".join(report_lines)
+        print("Configuration drift detected:\n" + report_text)
+
+        history_path = f"history/diff_{timestamp}.txt"
+        folder.upload_data(history_path, report_text.encode("utf-8"))
+
+        # Update the baseline so tomorrow's run diffs against today's state,
+        # not the original drift -- comment this out if you'd rather keep
+        # alerting on the same drift until someone acknowledges it.
+        save_snapshot(folder, current_path, new_snapshot)
+
+        raise Exception(
+            f"Connection configuration drift detected in {changed_connections} connection(s). "
+            f"See '{history_path}' in the drift folder for details.\n\n{report_text}"
+        )
+    else:
+        print(f"No changes detected across {len(new_snapshot)} connection(s).")
+
+run()
