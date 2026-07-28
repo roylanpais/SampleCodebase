@@ -1,0 +1,77 @@
+import dataikuapi
+import pandas as pd
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+DSS_HOST = "https://your-dss-instance.example.com:11000"  # Replace with your DSS URL
+API_KEY = "YOUR_ADMIN_API_KEY"                            # Must have Admin permissions
+
+def get_spark_config_group_access(host, api_key):
+    """
+    Retrieves all Spark execution configurations from Dataiku DSS general settings
+    and extracts the group access permissions for each config.
+    """
+    # Initialize the API client
+    client = dataikuapi.DSSClient(host, api_key)
+    
+    # Disable SSL verification if using self-signed certificates (optional)
+    # client._session.verify = False
+
+    # Fetch general settings from the DSS instance
+    general_settings = client.get_general_settings()
+    raw_settings = general_settings.get_raw()
+
+    # Extract Spark execution configurations
+    spark_settings = raw_settings.get("sparkSettings", {})
+    execution_configs = spark_settings.get("executionConfigs", [])
+
+    if not execution_configs:
+        print("No Spark execution configurations found on this instance.")
+        return []
+
+    results = []
+
+    for config in execution_configs:
+        config_name = config.get("name", "Unnamed Config")
+        usable_by = config.get("usableBy", "ALL")
+        
+        # Determine allowed groups based on usability mode
+        if usable_by == "ALL":
+            allowed_groups = ["ALL_GROUPS (Everyone)"]
+        elif usable_by == "ALLOWED":
+            allowed_groups = config.get("allowedGroups", [])
+            if not allowed_groups:
+                allowed_groups = ["None"]
+        else:
+            allowed_groups = [f"Restricted ({usable_by})"]
+
+        results.append({
+            "spark_config_name": config_name,
+            "access_mode": usable_by,
+            "allowed_groups": allowed_groups,
+            "group_count": len(allowed_groups) if usable_by != "ALL" else "All"
+        })
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Execution & Output Parsing
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    configs_access = get_spark_config_group_access(DSS_HOST, API_KEY)
+
+    print("\n--- Spark Configuration Access Report ---\n")
+    for item in configs_access:
+        groups_str = ", ".join(item["allowed_groups"])
+        print(f"• Config Name : {item['spark_config_name']}")
+        print(f"  Access Mode : {item['access_mode']}")
+        print(f"  Groups      : {groups_str}")
+        print("-" * 40)
+
+    # Optional: Display as a clean tabular output
+    df = pd.DataFrame(configs_access)
+    df["allowed_groups"] = df["allowed_groups"].apply(lambda g: ", ".join(g))
+    print("\nSummary Table:")
+    print(df.to_string(index=False))
