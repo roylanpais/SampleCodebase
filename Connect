@@ -1,0 +1,40 @@
+Integration Report: Configuring Data Connections in Dataiku 15
+This report outlines the technical requirements, prerequisites, and step-by-step procedures to establish data connections from Dataiku DSS (Version 15) to Microsoft SharePoint, Microsoft OneDrive, and standard Network Shares (SMB/CIFS).
+1. Microsoft SharePoint Connection
+Connecting to SharePoint in Dataiku 15 relies on the official SharePoint Online Plugin. This integration requires an Azure Active Directory (Microsoft Entra ID) application registration to facilitate secure access to Microsoft Graph endpoints.
+Prerequisites (Azure Portal)
+ * App Registration: Create a new App registration in the Azure Portal under Microsoft Entra ID.
+ * API Permissions: Navigate to Microsoft Graph API permissions and grant access based on your desired connection mode:
+   * Per-User mode (Delegated): Advised permissions are openid, Files.ReadWrite.All, Sites.ReadWrite.All, and User.Read.
+   * Global mode (Application): Use Sites.Read.All (for read-only access) or a combination of Sites.ReadWrite.All and Sites.Manage.All (for full write access to files and lists).
+ * Credentials: Generate a Client Secret. Note down the Application (client) ID, Directory (tenant) ID, and Client Secret.
+Configuration in Dataiku 15
+ * Install Plugin: Log in as an administrator, go to Plugins > Store, and install the SharePoint Online plugin.
+ * Configure Settings: Navigate to Plugins > Installed > SharePoint > Settings > SharePoint Online Login. Enter your target SharePoint instance details (Tenant ID, Client ID, Client Secret).
+ * Create the Connection: Go to the global Connections configuration. Create a new SharePoint Online connection, and choose your Auth type (e.g., Client Secret for Application mode or Resource Owner Password for Per-user mode).
+ * User Authentication (Per-User Mode): Each user must navigate to their Profile > Credentials, locate the SharePoint connection, click Connect, and complete the Microsoft Single Sign-On (SSO) prompt to authorize their access.
+2. Microsoft OneDrive Connection
+Connecting to OneDrive requires the official OneDrive Plugin. Like SharePoint, it utilizes Microsoft Entra ID for OAuth2 authentication but strictly targets user files rather than Site document libraries.
+Prerequisites (Azure Portal)
+ * App Registration: Create a new App registration. You must configure a Redirect URI pointing back to your Dataiku instance: https://<YOUR_DSS_URL>:<PORT>/dip/api/oauth2-callback. (Note: This must be an HTTPS server unless running locally).
+ * API Permissions: Add the following Delegated permissions under Microsoft Graph: offline_access, Files.Read.All, and Files.ReadWrite.All.
+ * Credentials: Generate a new client secret and record the Application ID and Client Secret.
+Configuration in Dataiku 15
+ * Install Plugin: Install the OneDrive plugin from the Dataiku plugin store.
+ * Create Preset: Go to Plugins > Installed > OneDrive > Settings > OneDrive OAuth details and click + Add preset.
+ * Add Credentials: Paste the Application ID and Client Secret into the preset parameters and save.
+ * User Authorization: Users must navigate to Profile & settings > Credentials, find the OneDrive preset, click the edit button, and follow the redirect to Microsoft's SSO page to grant Dataiku access to their OneDrive.
+ * Usage: Dataiku users can now go into their flow and select Dataset > OneDrive to read files, or Dataset > Folder (selecting OneDrive as the Store) to export data.
+3. Network Share Connection (SMB/CIFS)
+Unlike API-driven cloud services, Dataiku does not use a dedicated plugin to connect to standard Network Shares (such as Windows SMB or CIFS drives). Instead, the network share must be mapped directly to the underlying Linux operating system hosting the Dataiku DSS instance. Dataiku then accesses it natively using a Server filesystem connection.
+(Note: If the network server supports FTP or SFTP, you can bypass OS-level mounting and simply use Dataiku's native FTP/SFTP connections.)
+Prerequisites (OS-Level Setup)
+ * Mount the Drive: Work with your Linux/Infrastructure administrator to mount the SMB/CIFS network share on the Linux server hosting Dataiku (typically using cifs-utils and the standard mount command).
+ * Crucial Architecture Warning: Never mount a network share inside the Dataiku DSS data directory. Doing so will cause the network share to be fully scanned and included in internal Dataiku backups, resulting in severe performance degradation or storage failures. Instead, mount it in an independent external directory (e.g., /dataiku/shares/my_network_drive).
+ * Persistence: Add the mount configuration to /etc/fstab to ensure the drive maps automatically when the Linux server reboots. Ensure the Dataiku system user (typically dataiku) has appropriate read/write POSIX permissions on the mount point.
+Configuration in Dataiku 15
+ * Create Connection: Log in to Dataiku as an administrator, go to Administration > Connections, and click New Connection.
+ * Select Type: Choose Server filesystem.
+ * Define Path: Specify the absolute root path of the OS-mounted network share (e.g., /dataiku/shares/my_network_drive).
+ * Security & Restrictions: Configure path restrictions to prevent users from navigating outside the designated share directory and into sensitive server files.
+ * Usage: Users can utilize this connection by creating a "Files in folder" dataset or Managed Folder in their flow, referencing the new Server filesystem connection to seamlessly read/write data to the network drive.
