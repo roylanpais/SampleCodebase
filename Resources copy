@@ -1,0 +1,33 @@
+import dataiku
+import os
+
+# Retrieve the absolute path to the Code Environment's resource directory
+resource_dir = os.environ.get('DKU_CUSTOM_RESOURCE_FOLDER')
+
+if not resource_dir:
+    raise RuntimeError("Resource folder not found. Verify the recipe uses the correct code environment.")
+
+# Define the source path (e.g., the nested sentence_transformers folder)
+source_folder = os.path.join(resource_dir, "sentence_transformers")
+
+# Connect to the output Managed Folder by its Flow ID
+# Replace 'YOUR_FOLDER_ID' with the exact ID of your target folder
+managed_folder = dataiku.Folder("YOUR_FOLDER_ID")
+
+# Recursively iterate through the resource folder and stream files
+for root, dirs, files in os.walk(source_folder):
+    for file_name in files:
+        local_file_path = os.path.join(root, file_name)
+        
+        # Maintain the internal directory structure during the upload
+        relative_dest_path = os.path.relpath(local_file_path, source_folder)
+        
+        # upload_stream() safely writes to both local and non-local storage 
+        with open(local_file_path, "rb") as f:
+            managed_folder.upload_stream(relative_dest_path, f)
+            
+        # Specific verification check
+        if file_name == "ec1b606f-12b1-4ce9-82ca-82379c38cf48":
+            print(f"Confirmed transfer of target file: {file_name}")
+
+print("Copy operation completed.")
