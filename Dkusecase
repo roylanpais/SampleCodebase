@@ -1,0 +1,27 @@
+**Summary: Dataiku fit for a telemetry/alerting use case**
+
+**Verdict:** Not a good fit for real-time telemetry ingestion and alerting, but a good fit for downstream analytics.
+
+**Why it doesn't fit**
+- **No real-time alerting.** Dataiku can't do event-driven alerting. Scenarios allow basic checks, but they run after the fact, not as signals arrive.
+- **Custom Python wouldn't fix it.** Building a custom solution is possible but would be severely hampered compared with a dedicated platform.
+- **Scale risk.** Dataiku wouldn't keep up with indeterminate telemetry growth, especially when critical alerts depend on it.
+- **Limited Kafka support.** The connector is rudimentary and supports only a couple of connection modes. These don't match how Python developers normally connect to Kafka, so anyone building (e.g., a web app) would end up writing the connection themselves, which adds friction and undercuts the value of the platform.
+
+**Recommended architecture**
+- **Ingestion and alerting:** Use a purpose-built telemetry system such as Grafana, Prometheus, or a custom/other solution.
+- **Storage:** Land the data in a data lake or similar store.
+- **Analytics:** Use Dataiku on top of that stored data for correlation and complex analysis. This is where it adds real value.
+
+**Bottom line:** Keep Dataiku out of the ingestion and alerting path, and apply it to analytics after the data has been ingested.
+
+Based on the provided text, here is the summary of the Dataiku use case regarding telemetry and alerting:
+Core Verdict: Dataiku is not suited for real-time telemetry ingestion and alerting, but it is highly effective for complex, post-ingestion analytics.
+Out of Scope (Poor Fit for Dataiku):
+ * Real-Time Alerting: Dataiku cannot perform event-driven, immediate alerting on incoming telemetry signals. It cannot keep up with the indeterminate growth of telemetry data required for critical alerts.
+ * Data Ingestion via Kafka: Dataiku's out-of-the-box Kafka connection is rudimentary and restrictive. It lacks the connection modes typically used by Python developers, which forces them to build custom connections and hinders scalability.
+ * Alternative Recommendation: Dedicated systems like Prometheus or Grafana are better equipped to handle the ingestion, scaling, and real-time alerting of telemetry data.
+In Scope (Good Fit for Dataiku):
+ * Complex Analytics: Once telemetry data is ingested into a separate data source (like a data lake), Dataiku is well-suited for heavy analytical workloads, pattern correlation, and deep analysis.
+ * Batch Alerting: Dataiku can handle rudimentary, ex post facto (after-the-fact) alerting using scheduled scenarios, provided it does not need to be instantaneous.
+Proposed Architecture: Use specialized telemetry tools to capture signals and trigger immediate alerts, route that data into a data lake, and then connect Dataiku to the data lake to perform advanced analytics and correlation.
