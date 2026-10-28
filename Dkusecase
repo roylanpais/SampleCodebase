@@ -1,27 +1,39 @@
-**Summary: Dataiku fit for a telemetry/alerting use case**
+**Summary**
 
-**Verdict:** Not a good fit for real-time telemetry ingestion and alerting, but a good fit for downstream analytics.
 
-**Why it doesn't fit**
-- **No real-time alerting.** Dataiku can't do event-driven alerting. Scenarios allow basic checks, but they run after the fact, not as signals arrive.
-- **Custom Python wouldn't fix it.** Building a custom solution is possible but would be severely hampered compared with a dedicated platform.
-- **Scale risk.** Dataiku wouldn't keep up with indeterminate telemetry growth, especially when critical alerts depend on it.
-- **Limited Kafka support.** The connector is rudimentary and supports only a couple of connection modes. These don't match how Python developers normally connect to Kafka, so anyone building (e.g., a web app) would end up writing the connection themselves, which adds friction and undercuts the value of the platform.
+Key Issues Identified
+ * Cross-environment connections (staging-to-production) are strictly prohibited; processing must be restricted to matching environments (e.g., staging-to-staging, prod-to-prod).
+ * The provided Kafka URL (centralus.azure.conf.cloud) is unrecognized because the organization's Kafka infrastructure is hosted in AWS, not Azure.
+Kafka Architecture & Networking
+ * While Kafka operates under a single tenant, environments (acceptance, staging, production) are entirely segregated.
+ * The team must use the newer Private Link connection rather than the deprecated peering connection.
+ * Connection routing will go through Akira and firewalls via Private Link, with credentials likely stored and managed within Dataiku.
+Roles & Responsibilities
+ * BDE Team: Owns Kafka. They are responsible for creating topics, granting access, and configuring user permissions.
+ * Cloud Team: Handles network infrastructure. They will configure DNS (Route 53) and open the necessary firewall rules once the Private Link requirement is met.
+Next Steps
+ * Reach out to the BDE team to establish proper AWS Kafka credentials, discuss topic access, and set up the Private Link connection.
 
-**Recommended architecture**
-- **Ingestion and alerting:** Use a purpose-built telemetry system such as Grafana, Prometheus, or a custom/other solution.
-- **Storage:** Land the data in a data lake or similar store.
-- **Analytics:** Use Dataiku on top of that stored data for correlation and complex analysis. This is where it adds real value.
 
-**Bottom line:** Keep Dataiku out of the ingestion and alerting path, and apply it to analytics after the data has been ingested.
 
-Based on the provided text, here is the summary of the Dataiku use case regarding telemetry and alerting:
-Core Verdict: Dataiku is not suited for real-time telemetry ingestion and alerting, but it is highly effective for complex, post-ingestion analytics.
-Out of Scope (Poor Fit for Dataiku):
- * Real-Time Alerting: Dataiku cannot perform event-driven, immediate alerting on incoming telemetry signals. It cannot keep up with the indeterminate growth of telemetry data required for critical alerts.
- * Data Ingestion via Kafka: Dataiku's out-of-the-box Kafka connection is rudimentary and restrictive. It lacks the connection modes typically used by Python developers, which forces them to build custom connections and hinders scalability.
- * Alternative Recommendation: Dedicated systems like Prometheus or Grafana are better equipped to handle the ingestion, scaling, and real-time alerting of telemetry data.
-In Scope (Good Fit for Dataiku):
- * Complex Analytics: Once telemetry data is ingested into a separate data source (like a data lake), Dataiku is well-suited for heavy analytical workloads, pattern correlation, and deep analysis.
- * Batch Alerting: Dataiku can handle rudimentary, ex post facto (after-the-fact) alerting using scheduled scenarios, provided it does not need to be instantaneous.
-Proposed Architecture: Use specialized telemetry tools to capture signals and trigger immediate alerts, route that data into a data lake, and then connect Dataiku to the data lake to perform advanced analytics and correlation.
+
+**Key concerns raised**
+- **No staging → production access.** This is real QB processing, not read-only, so connections must be staging-to-staging (and prod-to-prod).
+- **Unexpected URL.** The endpoint doesn't match their setup, since their Kafka runs in AWS. It came from the credentials the user was given.
+
+**Kafka setup clarified**
+- There's one Kafka tenant with segregated environments (acceptance, staging, prod).
+- There are two connection types: an old **peering** connection (being phased out, not to be used) and the newer **private link** (the one to use).
+
+**Ownership**
+- The **BDE team** owns Kafka. They grant access to existing topics, create new ones, and manage permissions.
+- The **cloud team** doesn't own Kafka or its permissions. Their role is networking only.
+
+**Cloud team's part (small effort)**
+- Open firewall rules.
+- Add a few Route 53 rules on the AI accounts.
+- Ensure DNS and routing through Akira and the firewalls work.
+- Dataiku would call Kafka via that URL. Credentials would be stored within Dataiku.
+
+**Next step**
+- Contact the **BDE team** to discuss topics, permissions and the right endpoint, and confirm private link use. Then return to the cloud team to complete the networking setup.
